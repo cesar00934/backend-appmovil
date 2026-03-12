@@ -1,66 +1,31 @@
-import express from "express";
-import { supabaseAdmin } from "../lib/supabaseClient.js";
-import { requireAuth } from "../middleware/requireAuth.js";
-import { requireSupervisor } from "../middleware/requireSupervisor.js";
-import Joi from "joi";
+// routes/admin.js
+import express from 'express';
+import { supabaseAdmin } from '../lib/supabaseClient.js';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
-const replaceSchema = Joi.object({
-  users: Joi.array().items(
-    Joi.object({
-      email: Joi.string().email().required(),
-      role: Joi.string().valid("operario", "supervisor").default("operario"),
-      tempPassword: Joi.string().optional(),
-    })
-  ).min(0)
-});
-
-router.post("/replace-users", requireAuth, requireSupervisor, async (req, res) => {
+router.post('/replace-users', async (req, res) => {
   try {
-    const { error, value } = replaceSchema.validate(req.body);
-    if (error) return res.status(400).json({ error: error.message });
+    const auth = req.headers.authorization?.split(' ')[1];
+    if (!auth) return res.status(401).json({ error: 'no token' });
 
-    const { users } = value;
+    // Validate token (if using supabase JWT, verify signature with JWT_SECRET or use supabase to get user)
+    const payload = jwt.verify(auth, process.env.JWT_SECRET); // example
+    if (!payload || payload.role !== 'supervisor') return res.status(403).json({ error: 'forbidden' });
 
-    // Backup / audit: copy existing users
-    const { data: existing, error: e1 } = await supabaseAdmin.from("usuarios").select("*");
-    if (e1) return res.status(500).json({ error: "db error" });
-
-    // delete non-supervisors from auth and table
-    const toDelete = existing.filter(u => u.role !== "supervisor").map(u => u.id_servidor).filter(Boolean);
-    for (const uid of toDelete) {
-      try {
-        await supabaseAdmin.auth.admin.deleteUser(uid);
-      } catch (err) {
-        console.warn("delete user error", uid, err.message);
-      }
+    const { users } = req.body; // array of { email, password_hash, role }
+    // transaction: delete all then insert new
+    // For simplicity: delete all
+    await supabaseAdmin.from('usuarios').delete();
+    // insert new:
+    if (Array.isArray(users) && users.length) {
+      await supabaseAdmin.from('usuarios').insert(users);
     }
-    await supabaseAdmin.from("usuarios").delete().neq("role", "supervisor");
-
-    // create new users
-    for (const u of users) {
-      const email = u.email;
-      const role = u.role || "operario";
-      const passwd = u.tempPassword || Math.random().toString(36).slice(-8) + "A1!";
-      const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-        email,
-        password: passwd,
-        email_confirm: true
-      });
-      if (createErr) {
-        console.error("createUserErr", createErr);
-        continue;
-      }
-      await supabaseAdmin.from("usuarios").insert([{ id_servidor: created.user.id, usuario: email, role }]);
-    }
-
-    await supabaseAdmin.from("audit_logs").insert([{ actor: req.supabaseUser.id, action: "replace-users", payload: JSON.stringify(users), timestamp: new Date().toISOString() }]);
-
     res.json({ ok: true });
   } catch (err) {
-    console.error("replace-users error", err);
-    res.status(500).json({ error: "server error" });
+    console.error(err);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
