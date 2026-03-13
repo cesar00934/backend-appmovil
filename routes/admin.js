@@ -11,8 +11,10 @@ router.post('/replace-users', async (req, res) => {
     if (!auth) return res.status(401).json({ error: 'no token' });
 
     // Validate token (if using supabase JWT, verify signature with JWT_SECRET or use supabase to get user)
-    const payload = jwt.verify(auth, process.env.JWT_SECRET); // example
-    if (!payload || payload.role !== 'supervisor') return res.status(403).json({ error: 'forbidden' });
+// Usamos el middleware requireAuth que ya valida el token contra Supabase
+// sin necesidad de un secreto manual en nuestro .env.
+const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (!payload || payload.role !== 'supervisor') return res.status(403).json({ error: 'forbidden' });
 
     const { users } = req.body; // array of { email, password_hash, role }
     // transaction: delete all then insert new
