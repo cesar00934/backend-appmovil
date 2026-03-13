@@ -1,33 +1,30 @@
-// routes/admin.js
 import express from 'express';
 import { supabaseAdmin } from '../lib/supabaseClient.js';
-import jwt from 'jsonwebtoken';
+import { requireAuth } from '../middleware/requireAuth.js';
+import { requireSupervisor } from '../middleware/requireSupervisor.js';
 
 const router = express.Router();
 
-router.post('/replace-users', async (req, res) => {
+// Usamos middlewares para validar el token y el rol de supervisor
+router.post('/sync-users', requireAuth, requireSupervisor, async (req, res) => {
   try {
-    const auth = req.headers.authorization?.split(' ')[1];
-    if (!auth) return res.status(401).json({ error: 'no token' });
-
-    // Validate token (if using supabase JWT, verify signature with JWT_SECRET or use supabase to get user)
-// Usamos el middleware requireAuth que ya valida el token contra Supabase
-// sin necesidad de un secreto manual en nuestro .env.
-const { data, error } = await supabaseAdmin.auth.getUser(token);
-  if (!payload || payload.role !== 'supervisor') return res.status(403).json({ error: 'forbidden' });
-
-    const { users } = req.body; // array of { email, password_hash, role }
-    // transaction: delete all then insert new
-    // For simplicity: delete all
-    await supabaseAdmin.from('usuarios').delete();
-    // insert new:
-    if (Array.isArray(users) && users.length) {
-      await supabaseAdmin.from('usuarios').insert(users);
+    const { users } = req.body;
+    
+    if (!Array.isArray(users)) {
+      return res.status(400).json({ error: 'Se esperaba un array de usuarios' });
     }
-    res.json({ ok: true });
+
+    // Usamos upsert para actualizar o insertar sin borrar todo (más seguro)
+    const { data, error } = await supabaseAdmin
+      .from('usuarios')
+      .upsert(users, { onConflict: 'email' });
+
+    if (error) throw error;
+
+    res.json({ ok: true, message: 'Usuarios sincronizados' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'server_error' });
+    console.error('Admin Error:', err.message);
+    res.status(500).json({ error: 'Error interno en el servidor admin' });
   }
 });
 
